@@ -7,6 +7,7 @@
 #include <sys/types.h> //for fork
 #include <sys/wait.h>
 #include <fcntl.h>
+#include <signal.h>
 
 //constants:
 #define INPUT_LENGTH 2048
@@ -16,9 +17,10 @@
 //globals       sowwy :(
 pid_t bg_pids[MAX_BG_PROCESS];
 int bg_count = 0;
+volatile bool foreground_only_mode = false;
 
 //structs
-//struct implimentation provided by OSU CS374_400_U2025 "sample_parser.c"
+//struct implimentation & partse_input() provided by OSU CS374_400_U2025 "sample_parser.c"
 struct command_line
 {
 	char *argv[MAX_ARGS + 1];
@@ -47,7 +49,8 @@ struct command_line *parse_input()
 		} else if(!strcmp(token,">")){
 			curr_command->output_file = strdup(strtok(NULL," \n")); //remember to free, strdup dyanmically allocates.
 		} else if(!strcmp(token,"&")){
-			curr_command->is_bg = true;
+			//curr_command->is_bg = true;
+            if (!foreground_only_mode){ curr_command->is_bg = true; }
 		} else{
 			curr_command->argv[curr_command->argc++] = strdup(token); //remember to free, strdup dyanmically allocates.
 		}
@@ -116,6 +119,24 @@ void status(int lastStatus, bool signaled){
     fflush(stdout);
     
 }
+
+void handle_SIGTSTP(int signo){
+    char* m;
+    if (foreground_only_mode)
+    {
+        foreground_only_mode = false;
+        m = "\nExiting foreground-only mode\n";
+    }
+    else
+    {
+        foreground_only_mode = true;
+        m = "\nEntering foreground-only mode (& is now ignored)\n";
+    }
+    write(STDOUT_FILENO, m, strlen(m));
+    
+
+}
+    
 
 
 void input_redirect(struct command_line *command){
@@ -251,7 +272,19 @@ int other_commands(struct command_line *command, int *lastStatus, bool *signaled
     //check if child process is running
     if (spawnpid == 0)
     {
-        //we are running commands in the child proces here. 
+        //we are running commands in the child process here. 
+        if (!(command->is_bg))
+        {
+            //bc its child thats not background proccess we want to un-ignore SIGINT.
+            //recall the child had inherited ignoring SIGINT from its parent. 
+            struct sigaction default_SIGINT = {0};
+            default_SIGINT.sa_handler = SIG_DFL;
+            sigfillset(&default_SIGINT.sa_mask);
+            default_SIGINT.sa_flags = 0;
+            sigaction(SIGINT, &default_SIGINT, NULL);
+        }
+
+\
 
         //recall file redirection is only scoped to this command as it only occurs for this child proccess
         //INPUT
@@ -290,6 +323,7 @@ int other_commands(struct command_line *command, int *lastStatus, bool *signaled
     waits for a specific child process (identified by its Process ID) and returns a stat value analyzed with "Analysis Macros"
 
     */
+
    //go to parent process
    else{
         //check if command should be ran in background or not
@@ -308,9 +342,7 @@ int other_commands(struct command_line *command, int *lastStatus, bool *signaled
             else
             {
                 waitpid(spawnpid, &childStatus, 0);
-            }
-            
-            
+            }  
 
         }
         else{
@@ -318,10 +350,13 @@ int other_commands(struct command_line *command, int *lastStatus, bool *signaled
             //wait for child process to finish
             waitpid(spawnpid, &childStatus, 0);
 
-            if (WIFEXITED(childStatus)){
+            if (WIFEXITED(childStatus))
+            {
                 *lastStatus = WEXITSTATUS(childStatus);
                 *signaled = false;
-            } else if (WIFSIGNALED(childStatus)){
+            } 
+            else if (WIFSIGNALED(childStatus))
+            {
                 *lastStatus = WTERMSIG(childStatus);
                 *signaled = true;
             }
@@ -331,9 +366,33 @@ int other_commands(struct command_line *command, int *lastStatus, bool *signaled
     return 0;
 }
 
+//initially called to set up the shiell, i.e. the parent process to ignore SIGINT
+void setup_ignore_sigint(){
+    //initilize SIGINT_action struct to be empty.
+    struct sigaction SIGINT_action = {0};
+    //set struct's sa_handler member variable to SIG_IGN or SIG_DFL will ignore it
+    SIGINT_action.sa_handler = SIG_IGN;
+    //block all signals while handle_SIGINT is running
+    sigfillset(&SIGINT_action.sa_mask);
+    SIGINT_action.sa_flags = 0;
+    //setup signal handling function for when SIGINT is called
+    sigaction(SIGINT, &SIGINT_action, NULL);
+
+
+}
+
+void setup_sigstp(){
+    struct sigaction SIGTSTP_action = {0};
+    SIGTSTP_action.sa_handler = handle_SIGTSTP; //link our handler we made
+    sigfillset(&SIGTSTP_action.sa_mask);
+    SIGTSTP_action.sa_flags = SA_RESTART; //we use this flag when using a signal handle.
+    sigaction(SIGTSTP, &SIGTSTP_action, NULL);
+
+}
 
 int main(){
-    
+    setup_ignore_sigint();
+    setup_sigstp();
     //variables
     struct command_line *currCommand;
     const char *homeDirectory = getenv("HOME"); 
@@ -406,5 +465,5 @@ https://www.ibm.com/docs/en/zvm/7.4.0?topic=descriptions-waitpid-wait-specific-c
 
 //https://www.geeksforgeeks.org/c/dup-dup2-linux-system-call/
 
-
+Canvas "Exploration: Signal Handling API"
 */
