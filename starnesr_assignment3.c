@@ -6,7 +6,7 @@
 
 #include <sys/types.h> //for fork
 #include <sys/wait.h>
-
+#include <fcntl.h>
 
 //constants:
 #define INPUT_LENGTH 2048
@@ -98,7 +98,56 @@ void change_directory(struct command_line *command, const char *home){
 
 }
 
-int other_commands(struct command_line *command, int *lastStatus){
+void status(int lastStatus, bool signaled){
+    if (signaled)
+    {
+       printf("terminated by signal %d\n", lastStatus);
+    }
+    else
+    {
+        printf("exit value %d\n", lastStatus);
+    }
+    //recall to use fflush() everytime we print
+    fflush(stdout);
+    
+}
+
+
+void input_redirect(struct command_line *command){
+    /*
+    Recall:
+    a file descriptor is an ID for open file or I/O steam (i.e. stdin & stdout). open() gets a file descriptor for a given file.
+    dup2(new, old) tells the OS, make the old file descriptor now refer to the same file as the new. To my understanding this means
+    now the traffic to the old descriptor is routed to the new descriptor, so a printf() could be routed to a file.  
+    */
+
+    int inputFileDescriptor = open(command->input_file, O_RDONLY);
+    //open() returns -1 if file couldn't open so lets check that
+    if (inputFileDescriptor == -1)
+    {
+        perror("cannot open input file");
+        exit(1);
+    }
+
+    dup2(inputFileDescriptor, 0); //0 because stdin file descriptor = 0
+    close(inputFileDescriptor);
+}
+
+void output_redirect(struct command_line *command){
+    int outputFileDescriptor = open(command->output_file, O_WRONLY | O_CREAT | O_TRUNC, 0644); //write mode, creates file if it doesnt exist, and erases contents with every write. 
+    //open() returns -1 if file couldn't open so lets check that
+    if (outputFileDescriptor == -1)
+    {
+        perror("cannot open input file");
+        exit(1);
+    }
+
+    dup2(outputFileDescriptor, 1); //1 because stdout file descriptor = 1
+    close(outputFileDescriptor);
+
+}
+
+int other_commands(struct command_line *command, int *lastStatus, bool *signaled){
     pid_t spawnpid = -5;
     int childStatus;
     // int child;
@@ -116,10 +165,22 @@ int other_commands(struct command_line *command, int *lastStatus){
     /*Recall: fork returns different things to the fork and the child.
     To the child it return returns 0, and to the parent it returns the process ID of the child*/ 
 
-
     //check if child process is running
     if (spawnpid == 0)
     {
+        //we are running commands in the child proces here. 
+
+        //recale file redirection is only scoped to this command as it only occurs for this child proccess
+        if (command->input_file != NULL)
+        {
+            input_redirect(command); 
+        }
+        if (command->output_file != NULL)
+        {
+            output_redirect(command);
+        }
+        
+
         execvp(command->argv[0], command->argv);
         //if the child process is active here, execvp() must of failed
         perror("execvp() failed");
@@ -136,25 +197,31 @@ int other_commands(struct command_line *command, int *lastStatus){
     waits for a specific child process (identified by its Process ID) and returns a stat value analyzed with "Analysis Macros"
 
     */
-    
-    //wait for child process to finish
-    waitpid(spawnpid, &childStatus, 0);
+   //go to parent process
+   else{
+        //check if command should be ran in background or not
+        if (command->is_bg)
+        {
+            //print the background process ID as done in the example
+            printf("background pid is %d\n", spawnpid);
+            fflush(stdout);
+        }
+        else{
+                
+            //wait for child process to finish
+            waitpid(spawnpid, &childStatus, 0);
 
-    if (WIFEXITED(childStatus)){
-        *lastStatus = WEXITSTATUS(childStatus);
-    } else if (WIFSIGNALED(childStatus)){
-        *lastStatus = WTERMSIG(childStatus);
-    }
+            if (WIFEXITED(childStatus)){
+                *lastStatus = WEXITSTATUS(childStatus);
+                *signaled = false;
+            } else if (WIFSIGNALED(childStatus)){
+                *lastStatus = WTERMSIG(childStatus);
+                *signaled = true;
+            }
 
+        }    
+   }
     return 0;
-    
-
-
-
-}
-
-void status(){
-
 }
 
 
@@ -163,7 +230,8 @@ int main(){
     //variables
     struct command_line *currCommand;
     const char *homeDirectory = getenv("HOME"); 
-    int lastStatus = 0;
+    int lastStatus = 0; //exit code value of last FOREGROUND process
+    bool x = false; //true if last FOREGROUND process killed by signal
 
     while(1){
         //struct command_line *currCommand = parse_input(); //get user input
@@ -196,13 +264,13 @@ int main(){
 
         else if (strcmp(currCommand->argv[0], "status") == 0) 
         {
-            status(lastStatus);
+            status(lastStatus,x);
             free_command(currCommand);
             continue;
         }
 
         else{
-            other_commands(currCommand, &lastStatus);
+            other_commands(currCommand, &lastStatus, &x);
 
         }
 
@@ -220,17 +288,15 @@ int main(){
 }
 
 /*
-sources:
+educational sources:
 
 https://www.geeksforgeeks.org/c/fork-system-call/ //for forking
-
 Canvas "Exploration: Process API - Monitoring Child Processes" //for forking
-
 https://www.ibm.com/docs/en/zvm/7.4.0?topic=descriptions-waitpid-wait-specific-child-process-end //for waitpid()
 
 //https://www.geeksforgeeks.org/cpp/cpp-getenv-function/ //for acquiring home directory
 
-
+//https://www.geeksforgeeks.org/c/dup-dup2-linux-system-call/
 
 
 */
