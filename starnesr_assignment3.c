@@ -11,6 +11,11 @@
 //constants:
 #define INPUT_LENGTH 2048
 #define MAX_ARGS 512
+#define MAX_BG_PROCESS 100
+
+//globals       sowwy :(
+pid_t bg_pids[MAX_BG_PROCESS];
+int bg_count = 0;
 
 //structs
 //struct implimentation provided by OSU CS374_400_U2025 "sample_parser.c"
@@ -147,6 +152,84 @@ void output_redirect(struct command_line *command){
 
 }
 
+void bg_input_redirect_null(){
+    int nullFileDescriptor = open("/dev/null", O_RDONLY);
+    if (nullFileDescriptor == -1)
+    {
+        perror("cannot open /dev/null for input");
+        exit(1);
+    }
+    dup2(nullFileDescriptor, 0); //stdin File Descriptor == 1
+    close(nullFileDescriptor);
+}
+
+void bg_output_redirect_null(){
+    int nullFileDescriptor = open("/dev/null", O_WRONLY);
+    if (nullFileDescriptor == -1)
+    {
+        perror("cannot open /dev/null for output");
+        exit(1);
+    }
+    dup2(nullFileDescriptor, 1); //stdout File Descriptor == 1
+    close(nullFileDescriptor);
+
+}
+
+//if I were smart I would combine all 4 of the above helper functions, as there is a LOT of repeated code. It is an eyesore but will due. I mostly wanted to cut fat in other_commands().
+
+void rotate_array_left(int* arr, int size) {
+    if (size <= 1){
+        return;
+    }
+
+    int first = arr[0];
+    for (int i = 0; i < size - 1; i++) 
+    {
+        arr[i] = arr[i + 1];
+    }
+    arr[size - 1] = first;
+}
+
+void bg_check(){
+    int i = 0;
+    int status;
+    pid_t x;
+
+    while (bg_count > i)
+    {
+        x = waitpid(bg_pids[i], &status, WNOHANG); //WNOHNAG "Demands status information immediately. -IBM https://www.ibm.com/docs/en/zvm/7.4.0?topic=descriptions-waitpid-wait-specific-child-process-end"
+
+        //check if proccess in done
+        if (x > 0)
+        {
+            printf("background pid %d is done: ", bg_pids[i]);
+            if (WIFEXITED(status)){
+                printf("exit value %d\n", WEXITSTATUS(status));
+            }
+            else if (WIFSIGNALED(status))
+            {
+                 printf("terminated by signal %d\n", WTERMSIG(status));
+            }
+            fflush(stdout);
+
+            rotate_array_left(bg_pids,bg_count);
+            bg_count--;
+        }
+        else{
+            i++; //go to next bg (if there is one)
+
+        }
+        
+    }
+    
+
+
+
+
+
+
+}
+
 int other_commands(struct command_line *command, int *lastStatus, bool *signaled){
     pid_t spawnpid = -5;
     int childStatus;
@@ -170,17 +253,27 @@ int other_commands(struct command_line *command, int *lastStatus, bool *signaled
     {
         //we are running commands in the child proces here. 
 
-        //recale file redirection is only scoped to this command as it only occurs for this child proccess
+        //recall file redirection is only scoped to this command as it only occurs for this child proccess
+        //INPUT
         if (command->input_file != NULL)
         {
             input_redirect(command); 
         }
+        else if (command->is_bg)
+        {
+            bg_input_redirect_null();
+        }
+        
+        //OUTPUT
         if (command->output_file != NULL)
         {
             output_redirect(command);
         }
+        else if (command->is_bg)
+        {
+            bg_output_redirect_null();
+        }
         
-
         execvp(command->argv[0], command->argv);
         //if the child process is active here, execvp() must of failed
         perror("execvp() failed");
@@ -205,6 +298,20 @@ int other_commands(struct command_line *command, int *lastStatus, bool *signaled
             //print the background process ID as done in the example
             printf("background pid is %d\n", spawnpid);
             fflush(stdout);
+
+            if (bg_count < MAX_BG_PROCESS)
+            {
+                bg_pids[bg_count + 1] = spawnpid; //append to our magical array where we track background proccess's by their PIDS
+                bg_count++;
+            }
+            //if we exceed acceptable number of background proccess's we are forced to wait until its done
+            else
+            {
+                waitpid(spawnpid, &childStatus, 0);
+            }
+            
+            
+
         }
         else{
                 
@@ -226,7 +333,7 @@ int other_commands(struct command_line *command, int *lastStatus, bool *signaled
 
 
 int main(){
-
+    
     //variables
     struct command_line *currCommand;
     const char *homeDirectory = getenv("HOME"); 
@@ -234,6 +341,7 @@ int main(){
     bool x = false; //true if last FOREGROUND process killed by signal
 
     while(1){
+        bg_check();
         //struct command_line *currCommand = parse_input(); //get user input
         currCommand = parse_input();
 
