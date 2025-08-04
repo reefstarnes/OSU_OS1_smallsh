@@ -125,12 +125,12 @@ void handle_SIGTSTP(int signo){
     if (foreground_only_mode)
     {
         foreground_only_mode = false;
-        m = "\nExiting foreground-only mode\n";
+        m = "\nExiting foreground-only mode";
     }
     else
     {
         foreground_only_mode = true;
-        m = "\nEntering foreground-only mode (& is now ignored)\n";
+        m = "\nEntering foreground-only mode (& is now ignored)";
     }
     write(STDOUT_FILENO, m, strlen(m));
     
@@ -330,12 +330,12 @@ int other_commands(struct command_line *command, int *lastStatus, bool *signaled
         if (command->is_bg)
         {
             //print the background process ID as done in the example
-            printf("background pid is %d\n", spawnpid);
+            printf("background pid %d\n", spawnpid);
             fflush(stdout);
 
             if (bg_count < MAX_BG_PROCESS)
             {
-                bg_pids[bg_count + 1] = spawnpid; //append to our magical array where we track background proccess's by their PIDS
+                bg_pids[bg_count] = spawnpid; //append to our magical array where we track background proccess's by their PIDS
                 bg_count++;
             }
             //if we exceed acceptable number of background proccess's we are forced to wait until its done
@@ -359,9 +359,12 @@ int other_commands(struct command_line *command, int *lastStatus, bool *signaled
             {
                 *lastStatus = WTERMSIG(childStatus);
                 *signaled = true;
+
+                printf("terminated by signal %d\n", *lastStatus);
+                fflush(stdout);
             }
 
-        }    
+        }   
    }
     return 0;
 }
